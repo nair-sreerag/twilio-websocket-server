@@ -10,6 +10,9 @@ const speech = require('@google-cloud/speech');
 const app = express();
 const HTTP_SERVER_PORT = process.env.PORT || 8081;
 
+// Add this at the top level to store call information
+const activeCalls = new Map(); // CallSid -> Call Info
+
 // Create Google Speech client
 const speechClient = new speech.SpeechClient();
 
@@ -26,11 +29,59 @@ class AudioBuffer {
   constructor() {
     this.audioChunks = [];
     this.processingInterval = null;
-    this.processingIntervalTime = 4000; // Process every 4 seconds
+    this.processingIntervalTime = 4000;
     this.isRecording = false;
     this.lastProcessTime = 0;
     this.chunkCount = 0;
-    this.minChunksBeforeProcessing = 100; // ~2 seconds of audio
+    this.minChunksBeforeProcessing = 100;
+    
+    // Session identifiers
+    this.sessionId = null;
+    this.callSid = null;
+    this.streamSid = null;
+    this.accountSid = null;
+    this.fromNumber = null;
+    this.toNumber = null;
+    this.fromCountry = null;
+    this.toCountry = null;
+    this.fromLocation = null;
+    this.sessionStartTime = null;
+  }
+
+  setSessionInfo(webSocketData, callInfo = null) {
+    this.sessionId = webSocketData.callSid;
+    this.callSid = webSocketData.callSid;
+    this.streamSid = webSocketData.streamSid;
+    this.accountSid = webSocketData.accountSid;
+    this.sessionStartTime = new Date();
+    
+    // If we have call info from TwiML, use it
+    if (callInfo) {
+      this.fromNumber = callInfo.from;
+      this.toNumber = callInfo.to;
+      this.fromCountry = callInfo.fromCountry;
+      this.toCountry = callInfo.toCountry;
+      this.fromLocation = `${callInfo.fromCity}, ${callInfo.fromState}`.replace(', ', '');
+    } else {
+      this.fromNumber = 'unknown';
+      this.toNumber = 'unknown';
+      this.fromCountry = 'unknown';
+      this.toCountry = 'unknown';
+      this.fromLocation = 'unknown';
+    }
+    
+    console.log('\n' + '🆔'.repeat(30));
+    console.log('📋 SESSION STARTED:');
+    console.log('🆔'.repeat(30));
+    console.log(`🔑 Session ID: ${this.sessionId}`);
+    console.log(`📞 Call SID: ${this.callSid}`);
+    console.log(`🌊 Stream SID: ${this.streamSid}`);
+    console.log(`🏢 Account SID: ${this.accountSid}`);
+    console.log(`📱 From: ${this.fromNumber} (${this.fromCountry})`);
+    console.log(`📞 To: ${this.toNumber} (${this.toCountry})`);
+    console.log(`📍 Location: ${this.fromLocation}`);
+    console.log(`⏰ Started: ${this.sessionStartTime.toISOString()}`);
+    console.log('🆔'.repeat(30) + '\n');
   }
 
   addAudioChunk(base64Audio) {
@@ -69,20 +120,21 @@ class AudioBuffer {
       return;
     }
 
-    console.log('🔄 Processing accumulated audio...');
-    console.log(`📊 Total audio chunks: ${this.audioChunks.length}`);
+    console.log('\n' + '🎤'.repeat(20));
+    console.log(`🔄 Processing audio for session: ${this.sessionId}`);
+    console.log(`📊 Audio chunks: ${this.audioChunks.length}`);
+    console.log(`⏰ Session duration: ${Math.round((now - this.sessionStartTime.getTime()) / 1000)}s`);
     
-    // Combine all audio chunks
     const completeAudio = Buffer.concat(this.audioChunks);
-    console.log(`📊 Total audio size: ${completeAudio.length} bytes`);
+    console.log(`📊 Audio size: ${completeAudio.length} bytes`);
     console.log(`📊 Estimated duration: ${(completeAudio.length / 8000).toFixed(2)} seconds`);
 
     this.lastProcessTime = now;
 
-    // Process the audio
+    // Process the audio with session context
     await this.transcribeAudioMulaw(completeAudio);
 
-    // Reset chunks but keep recording (for next segment)
+    // Reset chunks but keep session info
     this.audioChunks = [];
     this.chunkCount = 0;
     console.log('🔄 Ready for next audio segment...\n');
@@ -157,11 +209,8 @@ class AudioBuffer {
 
   async transcribeAudioMulaw(mulawBuffer) {
     try {
-      console.log('🔍 Transcribing with MULAW encoding...');
-      
-      // Add debugging
-      console.log(`🔊 MULAW buffer size: ${mulawBuffer.length} bytes`);
-      console.log(`🔊 First 20 bytes: ${Array.from(mulawBuffer.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+      console.log(`🔍 Transcribing audio for session: ${this.sessionId}`);
+      console.log(`📱 Caller: ${this.fromNumber}`);
       
       if (mulawBuffer.length === 0) {
         console.log('❌ Empty audio buffer');
@@ -169,12 +218,9 @@ class AudioBuffer {
       }
       
       const base64Audio = mulawBuffer.toString('base64');
-      console.log(`🔊 Base64 length: ${base64Audio.length}`);
       
       const request = {
-        audio: { 
-          content: base64Audio 
-        },
+        audio: { content: base64Audio },
         config: {
           encoding: 'MULAW',
           sampleRateHertz: 8000,
@@ -186,44 +232,56 @@ class AudioBuffer {
         },
       };
 
-      console.log('🔍 Sending request to Google Speech API...');
       const [response] = await speechClient.recognize(request);
-      
-      console.log('🔍 Google Speech API response:', JSON.stringify(response, null, 2));
       
       if (response.results && response.results.length > 0) {
         const transcription = response.results
           .map(result => result.alternatives[0].transcript)
-          .join(' ');
+          .join(' ')
+          .trim();
         
+        // Skip empty or very low confidence transcriptions
         const confidence = response.results[0].alternatives[0].confidence || 0;
+        if (transcription === '' || confidence < 0.3) {
+          console.log(`⏭️  Skipping low quality transcription (confidence: ${(confidence * 100).toFixed(1)}%)`);
+          return;
+        }
+        
+        const timestamp = new Date().toISOString();
         
         console.log('\n' + '='.repeat(60));
         console.log('🎯 TRANSCRIPTION RESULT:');
         console.log('='.repeat(60));
+        console.log(`🆔 Session ID: ${this.sessionId}`);
+        console.log(`📱 From: ${this.fromNumber} (${this.fromLocation})`);
+        console.log(`📞 To: ${this.toNumber}`);
+        console.log(`⏰ Timestamp: ${timestamp}`);
         console.log(`📝 Text: "${transcription}"`);
         console.log(`🌍 Language: English`);
         console.log(`📊 Confidence: ${(confidence * 100).toFixed(1)}%`);
         console.log('='.repeat(60) + '\n');
+        
+        // Save transcription with full caller context
+        this.saveTranscription({
+          sessionId: this.sessionId,
+          callSid: this.callSid,
+          streamSid: this.streamSid,
+          fromNumber: this.fromNumber,
+          toNumber: this.toNumber,
+          fromCountry: this.fromCountry,
+          toCountry: this.toCountry,
+          fromLocation: this.fromLocation,
+          timestamp: timestamp,
+          transcription: transcription,
+          confidence: confidence,
+          audioLength: mulawBuffer.length
+        });
+        
       } else {
-        console.log('❌ No transcription results found');
-        // Fallback to LINEAR16 conversion
-        console.log('🔄 Trying with LINEAR16 conversion...');
-        const wavBuffer = this.createWavBuffer(mulawBuffer);
-        await this.transcribeAudio(wavBuffer);
+        console.log(`❌ No transcription results for session: ${this.sessionId}`);
       }
     } catch (error) {
-      console.error('❌ Speech recognition error:', error.message);
-      console.error('Full error:', error);
-      
-      // Fallback to LINEAR16 conversion
-      console.log('🔄 Trying with LINEAR16 conversion as fallback...');
-      try {
-        const wavBuffer = this.createWavBuffer(mulawBuffer);
-        await this.transcribeAudio(wavBuffer);
-      } catch (fallbackError) {
-        console.error('❌ Fallback also failed:', fallbackError.message);
-      }
+      console.error(`❌ Transcription error for session ${this.sessionId}:`, error.message);
     }
   }
 
@@ -388,8 +446,33 @@ class AudioBuffer {
     }
   }
 
+  saveTranscription(data) {
+    // Example: Save to file (you can replace with database)
+    const fs = require('fs');
+    const logFile = `transcriptions_${new Date().toISOString().split('T')[0]}.jsonl`;
+    
+    fs.appendFileSync(logFile, JSON.stringify(data) + '\n');
+    console.log(`💾 Saved transcription to ${logFile}`);
+  }
+
   reset() {
-    console.log(`🔄 RESET called - had ${this.chunkCount} chunks`);
+    console.log(`🔄 RESET called for session: ${this.sessionId || 'unknown'}`);
+    
+    // Log session summary
+    if (this.sessionStartTime) {
+      const duration = Math.round((Date.now() - this.sessionStartTime.getTime()) / 1000);
+      console.log(`📊 Session Summary:`);
+      console.log(`   📱 Caller: ${this.fromNumber}`);
+      console.log(`   ⏰ Duration: ${duration} seconds`);
+      console.log(`   📊 Chunks: ${this.chunkCount}`);
+    }
+    
+    // Clean up stored call info
+    if (this.callSid) {
+      activeCalls.delete(this.callSid);
+    }
+    
+    // Reset everything
     this.audioChunks = [];
     this.isRecording = false;
     this.lastProcessTime = 0;
@@ -400,12 +483,28 @@ class AudioBuffer {
       this.processingInterval = null;
     }
     
+    // Clear session info
+    this.sessionId = null;
+    this.callSid = null;
+    this.streamSid = null;
+    this.accountSid = null;
+    this.fromNumber = null;
+    this.toNumber = null;
+    this.fromCountry = null;
+    this.toCountry = null;
+    this.fromLocation = null;
+    this.sessionStartTime = null;
+    
     console.log('🔄 Ready for next call...\n');
   }
 }
 
 // Create audio buffer instance
 const audioBuffer = new AudioBuffer();
+
+// Add this after creating the express app
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 // WebSocket connection handler
 mediaws.on("connect", function (connection) {
@@ -416,23 +515,39 @@ mediaws.on("connect", function (connection) {
       try {
         const data = JSON.parse(message.utf8Data);
         
-        // LOG ALL EVENTS
-        console.log(`📨 WebSocket event: ${data.event} at ${new Date().toISOString()}`);
-        
         if (data.event === "connected") {
           console.log("✅ Twilio stream connected");
         } else if (data.event === "start") {
           console.log("🎤 Audio stream started");
-          console.log("🔊 Waiting for user to speak...");
+          
+          // DEBUG: Log the entire start event structure
+          console.log("🐛 DEBUG - Full start event data:");
+          console.log(JSON.stringify(data, null, 2));
+          
+          // Extract session information with fallbacks
+          const sessionInfo = {
+            callSid: data.start?.callSid || data.callSid || 'unknown',
+            streamSid: data.start?.streamSid || data.streamSid || 'unknown',
+            accountSid: data.start?.accountSid || data.accountSid || 'unknown',
+            from: data.start?.from || data.from || data.start?.caller || 'unknown',
+            to: data.start?.to || data.to || data.start?.called || 'unknown'
+          };
+          
+          console.log("🐛 DEBUG - Extracted session info:");
+          console.log(JSON.stringify(sessionInfo, null, 2));
+          
           audioBuffer.reset();
+          audioBuffer.setSessionInfo(sessionInfo);
+          
         } else if (data.event === "media" && data.media && data.media.payload) {
-          // Add audio chunk to buffer
           audioBuffer.addAudioChunk(data.media.payload);
         } else if (data.event === "stop") {
           console.log("🛑 Audio stream stopped - forcing processing");
           audioBuffer.forceProcessAudio();
         } else {
-          console.log(`❓ Unknown event: ${data.event}`);
+          // DEBUG: Log any other events we might be missing
+          console.log(`🐛 DEBUG - Other event: ${data.event}`);
+          console.log(JSON.stringify(data, null, 2));
         }
       } catch (error) {
         console.error("❌ Error parsing WebSocket message:", error);
@@ -442,13 +557,43 @@ mediaws.on("connect", function (connection) {
 
   connection.on("close", function () {
     console.log("📞 Twilio WebSocket disconnected");
-    audioBuffer.reset();
+    audioBuffer.forceProcessAudio().then(() => {
+      audioBuffer.reset();
+    });
   });
 });
 
 // Routes
 app.post("/twiml", (req, res) => {
   console.log("twiml request received");
+  
+  // Extract call information from TwiML request
+  const callInfo = {
+    callSid: req.body.CallSid,
+    from: req.body.From || req.body.Caller,
+    to: req.body.To || req.body.Called,
+    fromCountry: req.body.FromCountry,
+    toCountry: req.body.ToCountry,
+    fromState: req.body.FromState,
+    toState: req.body.ToState,
+    fromCity: req.body.FromCity,
+    toCity: req.body.ToCity,
+    accountSid: req.body.AccountSid,
+    callStatus: req.body.CallStatus,
+    direction: req.body.Direction
+  };
+  
+  // Store call info for when WebSocket connects
+  activeCalls.set(callInfo.callSid, callInfo);
+  
+  console.log('📋 CALL INFORMATION CAPTURED:');
+  console.log(`🔑 Call SID: ${callInfo.callSid}`);
+  console.log(`📱 From: ${callInfo.from} (${callInfo.fromCountry})`);
+  console.log(`📞 To: ${callInfo.to} (${callInfo.toCountry})`);
+  console.log(`📍 Location: ${callInfo.fromCity}, ${callInfo.fromState}`);
+  console.log(`📊 Status: ${callInfo.callStatus}`);
+  console.log(`🔄 Direction: ${callInfo.direction}`);
+  
   const filePath = path.join(__dirname, "templates", "streams.xml");
   res.type("text/xml");
   res.sendFile(filePath);
