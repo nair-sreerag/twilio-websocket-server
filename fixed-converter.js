@@ -147,28 +147,37 @@ class TwilioAudioProcessor {
     const wavHeader = this.createWavHeader(pcmBuffer.length);
     const wavBuffer = Buffer.concat([wavHeader, pcmBuffer]);
     
-    fs.writeFileSync(outputPath, wavBuffer);
+
+    if(outputPath) {
+
+      fs.writeFileSync(outputPath, wavBuffer);
     
-    const duration = (mulawBuffer.length / this.sampleRate).toFixed(2);
-    console.log(`\n✅ CONVERSION COMPLETE:`);
-    console.log(`📁 File: ${outputPath}`);
-    console.log(`📊 Duration: ${duration} seconds`);
-    console.log(`📊 File size: ${(wavBuffer.length / 1024).toFixed(2)} KB`);
-    console.log(`🎧 Format: ${this.sampleRate}Hz, ${this.channels}ch, ${this.bitsPerSample}-bit PCM`);
-    
-    return true;
+      const duration = (mulawBuffer.length / this.sampleRate).toFixed(2);
+      console.log(`\n✅ CONVERSION COMPLETE:`);
+      console.log(`📁 File: ${outputPath}`);
+      console.log(`📊 Duration: ${duration} seconds`);
+      console.log(`📊 File size: ${(wavBuffer.length / 1024).toFixed(2)} KB`);
+      console.log(`🎧 Format: ${this.sampleRate}Hz, ${this.channels}ch, ${this.bitsPerSample}-bit PCM`);
+      
+      return false;
+
+    } else {
+      // return the wav buffer
+      console.log("returning wav buffer");
+      return wavBuffer;
+    }
   }
 }
 
 function main() {
   const args = process.argv.slice(2);
   
-  if (args.length < 2) {
+  if (args.length < 1) {
     console.log(`
 🎵 Twilio WebSocket to WAV Converter (FIXED)
 
 Usage:
-  node fixed-converter.js <input.json> <output.wav> [options]
+  node fixed-converter.js <input.json> [optional - if not provided, then the wav buffer will be returned]<output.wav> [options]
 
 Options:
   --gain=<number>        Apply gain multiplier (e.g., --gain=2.0)
@@ -197,8 +206,14 @@ Examples:
     console.log("outputFile ->>> ", outputFile);
     
     const processor = new TwilioAudioProcessor();
-    processor.convertToWav(jsonData, outputFile, options);
     
+    // can be wavBinary or false
+    const wavOutput = processor.convertToWav(jsonData, outputFile, options);
+
+    if(wavOutput) {
+      return wavOutput;
+    }
+
     console.log('\n🎉 Success! You should now have ~21 seconds of audio.');
     console.log('🎧 Try playing the WAV file with your media player!');
     

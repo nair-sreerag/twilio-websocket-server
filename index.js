@@ -5,6 +5,7 @@ const path = require("path");
 const express = require("express");
 const http = require("http");
 const { server: WebSocketServer } = require("websocket");
+const { TwilioAudioProcessor } = require("./fixed-converter");
 
 
 const app = express();
@@ -74,6 +75,12 @@ class MediaStream {
   }
 
   processMessage(message) {
+
+    const audioCollector = [];
+
+
+
+
     if (message.type === "utf8") {
       const data = JSON.parse(message.utf8Data);
       if (data.event === "connected") {
@@ -112,6 +119,24 @@ class MediaStream {
     //   log(" data received ->>> ", data)
       this.dataCollector.push(data);
       this.messageCount++;
+
+
+      if(this.dataCollector.length === 500){
+        // start processing it
+
+        const processor = new TwilioAudioProcessor();
+
+        const wavOutput = processor.convertToWav(this.dataCollector, null, {});
+
+        console.log("truncated wav output =>> ", wavOutput.toString('base64').slice(0, 100))        
+        
+
+
+
+      }
+
+
+
     } else if (message.type === "binary") {
       log("Media WS: binary message received (not supported)");
     } else {

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Start>
-    <Stream url="wss://twilio-websocket-server-139496872257.us-central1.run.app" track="inbound_track" />
+    <Stream url="wss://51a5bc75ee49.ngrok-free.app" track="inbound_track" />
   </Start>
   <Say>Please speak after the beep.</Say>
-  <Pause length="20" />
+  <Pause length="100" />
   <Hangup/>
 </Response>
