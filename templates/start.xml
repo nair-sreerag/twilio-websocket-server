@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Start>
+    <Stream url="wss://6f0ff2a1fd4a.ngrok-free.app" />
+  </Start>
+  <Say>Begin speaking after the beep. Press any key to end the recording.</Say>
+  <Pause length="60" />
+  <Hangup/>
+</Response>
