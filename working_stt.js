@@ -6,6 +6,8 @@ const express = require("express");
 const http = require("http");
 const { server: WebSocketServer } = require("websocket");
 const speech = require('@google-cloud/speech');
+const { DialogflowCXService } = require('./dialogflow-service');
+const textToSpeech = require('@google-cloud/text-to-speech');
 
 const app = express();
 const HTTP_SERVER_PORT = process.env.PORT || 8081;
@@ -132,6 +134,11 @@ class PhoneCallTranscriptionStream {
     connection.on("close", this.close.bind(this));
     
     this.setupSpeechStream();
+    
+    // Add these new properties
+    this.dialogflowService = new DialogflowCXService();
+    this.ttsClient = new textToSpeech.TextToSpeechClient();
+    this.sessionId = this.generateSessionId();
   }
 
   setupSpeechStream(languageCode = 'en-US') {
@@ -290,6 +297,9 @@ class PhoneCallTranscriptionStream {
           if (isFinal) {
             logTranscript(transcript, 'FINAL', confidence, this.currentLanguage);
             
+            // ADD THIS LINE - Process the final transcript
+            this.handleFinalTranscript(transcript);
+            
             this.transcriptBuffer.push({
               text: transcript,
               confidence: confidence,
@@ -378,6 +388,65 @@ class PhoneCallTranscriptionStream {
     }
     
     console.log("\n" + "=" .repeat(80));
+  }
+
+  async handleFinalTranscript(transcript) {
+    try {
+      console.log(`🤖 Sending to Dialogflow: "${transcript}"`);
+      
+      // Send to Dialogflow
+      const dialogflowResponse = await this.dialogflowService.sendMessage(
+        transcript, 
+        this.sessionId
+      );
+      
+      if (dialogflowResponse.success && dialogflowResponse.messages.length > 0) {
+        const responseText = dialogflowResponse.messages[0];
+        console.log(`🎯 AI Response: "${responseText}"`);
+        
+        // Convert to speech and send back
+        await this.sendAudioResponse(responseText);
+      }
+    } catch (error) {
+      console.error('❌ Error processing transcript:', error);
+    }
+  }
+
+  async sendAudioResponse(text) {
+    try {
+      // Generate TTS
+      const [response] = await this.ttsClient.synthesizeSpeech({
+        input: { text: text },
+        voice: { languageCode: 'en-US', ssmlGender: 'NEUTRAL' },
+        audioConfig: { 
+          audioEncoding: 'MULAW',
+          sampleRateHertz: 8000
+        }
+      });
+
+      // Convert to base64 and send back to Twilio
+      const audioBase64 = response.audioContent.toString('base64');
+      
+      // Send audio back through WebSocket
+      const mediaMessage = {
+        event: 'media',
+        streamSid: this.streamSid,
+        media: {
+          payload: audioBase64
+        }
+      };
+      
+      this.connection.send(JSON.stringify(mediaMessage));
+      console.log(`🔊 Sent audio response back to caller`);
+      
+    } catch (error) {
+      console.error('❌ Error generating/sending audio response:', error);
+    }
+  }
+
+  // Add session ID generator
+  generateSessionId() {
+    return `call_${this.callId || Date.now()}_${Math.random().toString(36).substring(2)}`;
   }
 
   close() {

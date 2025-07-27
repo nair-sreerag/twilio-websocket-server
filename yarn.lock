@@ -46,6 +46,13 @@
     stream-events "^1.0.5"
     uuid "^11.1.0"
 
+"@google-cloud/text-to-speech@^6.2.0":
+  version "6.2.0"
+  resolved "https://registry.yarnpkg.com/@google-cloud/text-to-speech/-/text-to-speech-6.2.0.tgz#5179c16ac1bd3ad7ad1dc88249a2734af1ec5ea7"
+  integrity sha512-CsmGFNZVL0mPrgcrkBPJ5LB8TPEKiPsER0N5h3nAkkPIeyAGGn3YwuRWyQhDYI5/XWLp11LlDEWqL8B14aYtNg==
+  dependencies:
+    google-gax "^5.0.0"
+
 "@grpc/grpc-js@^1.12.6":
   version "1.13.4"
   resolved "https://registry.yarnpkg.com/@grpc/grpc-js/-/grpc-js-1.13.4.tgz#922fbc496e229c5fa66802d2369bf181c1df1c5a"
